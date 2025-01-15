@@ -84,3 +84,72 @@ Make sure to adjust the path to `win10-setup.ps1` according to your project stru
 - If you need to perform additional network configurations or handle different network interfaces, you might need to adjust the script accordingly.
 
 Let me know if you need further adjustments or additional details!
+
+
+
+Sure! Here’s how you can convert the Packer configuration to HCL2 format, which is the HashiCorp Configuration Language used in Packer's newer versions.
+
+### Packer Configuration in HCL2
+
+```hcl
+# Define the builder to create a Windows 10 VM
+source "hyperv-iso" "win10" {
+  iso_url            = "path_to_windows10_iso"  # Provide the correct path to your Windows 10 ISO
+  iso_checksum       = "checksum_value"         # Provide the checksum of the ISO
+  communicator       = "winrm"
+  winrm_username     = "Administrator"          # Windows administrator username
+  winrm_password     = "password"               # Windows administrator password
+  vm_name            = "win10-vm"
+  disk_size          = 61440                     # Disk size in MB
+  floppy_files       = ["scripts/win10-setup.ps1"] # Copy the PowerShell script to the VM during provisioning
+
+  # Adjust any specific settings for your environment
+  # e.g., network settings, number of CPUs, RAM, etc.
+}
+
+# Define the provisioner to run PowerShell script after the VM is created
+build "win10" {
+  provisioner "powershell" {
+    scripts = ["scripts/win10-setup.ps1"]  # Path to your PowerShell script
+  }
+}
+```
+
+### Explanation of the HCL2 Configuration:
+
+1. **Source Block (`source "hyperv-iso" "win10"`)**:
+   - Specifies the source configuration for building a Windows 10 VM using the `hyperv-iso` builder.
+   - Replace `"path_to_windows10_iso"` with the actual path to your Windows 10 ISO file.
+   - Provide the ISO checksum for verification in the `"iso_checksum"` field.
+   - Set the `winrm_username` and `winrm_password` to the appropriate credentials for the VM.
+   - The `floppy_files` array includes the `win10-setup.ps1` PowerShell script that will be copied to the VM during the build process.
+
+2. **Build Block (`build "win10"`)**:
+   - Defines a `provisioner` block that will execute the `win10-setup.ps1` script after the VM is created.
+   - This is where your PowerShell provisioning script will run, which includes disabling the "WAP" network adapter, retrieving the IPv4 address of the "MGMT" adapter, and setting the default gateway.
+
+### Example Directory Structure
+
+```
+project_directory/
+│
+├── scripts/
+│   └── win10-setup.ps1   # PowerShell script to configure the VM
+│
+└── packer.hcl             # Packer configuration file in HCL2 format
+```
+
+### How to Use the Configuration:
+1. **Ensure the PowerShell Script Exists**: 
+   Place the `win10-setup.ps1` script in the `scripts/` directory, as specified in the HCL2 configuration.
+
+2. **Run Packer Build**: 
+   Execute the following command in your terminal within the project directory:
+
+   ```bash
+   packer build packer.hcl
+   ```
+
+   This will use the `hyperv-iso` builder to create the Windows 10 VM and run the `win10-setup.ps1` script during provisioning.
+
+Let me know if you need further assistance!
