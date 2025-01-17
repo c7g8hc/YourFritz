@@ -152,4 +152,164 @@ project_directory/
 
    This will use the `hyperv-iso` builder to create the Windows 10 VM and run the `win10-setup.ps1` script during provisioning.
 
-Let me know if you need further assistance!
+----
+
+To achieve the tasks you've described using Packer on Linux/macOS, we need to break it down into a series of steps. Below is an HCL (HashiCorp Configuration Language) script that covers the following:
+
+1. **Clone a Windows 10 template** using the `vsphere` Packer builder.
+2. **Run a PowerShell script** to elevate privileges and enable internet routing on the cloned VM.
+3. **Run Windows Update** using Packer's `windows-update` plugin.
+4. **Revert the network settings** (disable internet routing).
+5. **Create a new template** from the updated image.
+
+Here is the complete `packer.hcl` script to accomplish this:
+
+```hcl
+# Packer Configuration for cloning and updating a Windows 10 VM template in vSphere
+
+# Required variables
+variable "vsphere_server" {
+  type    = string
+  default = "vsphere.local"
+}
+
+variable "vsphere_user" {
+  type    = string
+  default = "your-username"
+}
+
+variable "vsphere_password" {
+  type    = string
+  default = "your-password"
+}
+
+variable "vsphere_datacenter" {
+  type    = string
+  default = "your-datacenter"
+}
+
+variable "vsphere_datastore" {
+  type    = string
+  default = "your-datastore"
+}
+
+variable "vsphere_cluster" {
+  type    = string
+  default = "your-cluster"
+}
+
+variable "vsphere_template_name" {
+  type    = string
+  default = "win10-template"
+}
+
+variable "vsphere_vm_name" {
+  type    = string
+  default = "win10-clone"
+}
+
+variable "vsphere_network" {
+  type    = string
+  default = "VM Network"
+}
+
+variable "vsphere_resource_pool" {
+  type    = string
+  default = "Resources"
+}
+
+# Packer Builder for vSphere
+source "vsphere-iso" "windows10" {
+  vcenter_server   = var.vsphere_server
+  user             = var.vsphere_user
+  password         = var.vsphere_password
+  datacenter       = var.vsphere_datacenter
+  datastore        = var.vsphere_datastore
+  cluster          = var.vsphere_cluster
+  network          = var.vsphere_network
+  resource_pool   = var.vsphere_resource_pool
+  template         = var.vsphere_template_name
+  vm_name          = var.vsphere_vm_name
+  wait_for_guest_ip_timeout = "30m"
+  
+  # Customize the Windows 10 VM settings if needed
+  customize {
+    windows_options {
+      computer_name = "win10-clone"
+    }
+  }
+}
+
+# Provisioner to run PowerShell commands for network configuration (Internet routing)
+build {
+  sources = ["source.vsphere-iso.windows10"]
+
+  provisioner "powershell" {
+    inline = [
+      # Elevate PowerShell to administrator
+      "$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent()",
+      "$currentPrincipal = New-Object System.Security.Principal.WindowsPrincipal($currentUser)",
+      "if (-not ($currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))) {",
+      "  $arguments = '-NoProfile -ExecutionPolicy Bypass -Command ""& {Start-Process powershell -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -Command \\'$MyInvocation.MyCommand.Definition\\'\\" -Verb RunAs}""'",
+      "  Start-Process powershell -ArgumentList $arguments -Verb RunAs",
+      "  exit",
+      "}",
+      
+      # Enable the internet routing (modify network adapter)
+      "Enable-NetAdapter -Name 'Ethernet0'",
+      "New-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '192.168.1.1'",
+      "Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('8.8.8.8', '8.8.4.4')"
+    ]
+  }
+
+  provisioner "windows-update" {
+    # Run Windows Update
+    update_command = "wuauclt /detectnow /updatenow"
+  }
+
+  provisioner "powershell" {
+    inline = [
+      # Revert network settings to block internet route (disable internet routing)
+      "Set-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '0.0.0.0'",
+      "Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('0.0.0.0')"
+    ]
+  }
+
+  provisioner "vsphere" {
+    # Create new template from updated VM
+    template_name = "win10-clone-updated-template"
+    clone_name    = var.vsphere_vm_name
+    wait_for_guest_ip_timeout = "30m"
+  }
+}
+
+# Define the output of the built image
+output "vsphere_vm_ip" {
+  value = "${build.vsphere-iso.windows10.ip_address}"
+}
+
+```
+
+### Explanation of the Script:
+
+1. **Cloning the Windows 10 Template:**
+   - The `vsphere-iso` builder is used to clone an existing Windows 10 VM template (`win10-template`), specifying the vSphere connection parameters, datacenter, datastore, network, and resource pool. The cloned VM will be named `win10-clone`.
+
+2. **PowerShell Script to Enable Internet Routing:**
+   - The first PowerShell provisioner ensures that the script is run with administrative privileges (using `Start-Process` to re-launch PowerShell as an administrator).
+   - It then configures the network adapter (`Ethernet0`) to enable internet access by assigning a static IP, gateway, and DNS servers.
+
+3. **Windows Update:**
+   - The `windows-update` provisioner uses `wuauclt` to force Windows to detect and apply available updates.
+
+4. **Revert Network Changes:**
+   - Another PowerShell provisioner is used to disable internet routing by removing the default gateway and DNS settings on the network adapter.
+
+5. **Create New Template:**
+   - The final step uses the `vsphere` provisioner to create a new template (`win10-clone-updated-template`) from the updated VM.
+
+### Notes:
+- You will need to ensure that Packer is properly configured to communicate with your vSphere environment, including having the necessary credentials and access to the vSphere API.
+- The network adapter name (`Ethernet0`) is assumed, but you may need to adjust it depending on your Windows image.
+- This script is tailored to clone and update a Windows 10 template. Modify variables such as IP addresses and DNS settings based on your specific network environment.
+
