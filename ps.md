@@ -474,3 +474,35 @@ output "vsphere_vm_ip" {
 - The `post_process` block uses `govc` to mark the updated VM as a template in vSphere.
 
 This approach avoids the error with the `vsphere` provisioner and leverages post-processing for creating the new template.
+
+
+```powershell
+# setup.ps1
+
+# Elevate PowerShell to administrator if not already running as administrator
+$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$currentPrincipal = New-Object System.Security.Principal.WindowsPrincipal($currentUser)
+
+if (-not ($currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))) {
+    $arguments = '-NoProfile -ExecutionPolicy Bypass -Command ""& {Start-Process powershell -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -Command \\'$MyInvocation.MyCommand.Definition\\'\\" -Verb RunAs}""'
+    Start-Process powershell -ArgumentList $arguments -Verb RunAs
+    exit
+}
+
+# Enable the internet routing (modify network adapter)
+Write-Host "Enabling network adapter for internet routing..."
+Enable-NetAdapter -Name 'Ethernet0'
+New-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '192.168.1.1'
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('8.8.8.8', '8.8.4.4')
+
+# Run Windows Update
+Write-Host "Running Windows Update..."
+Start-Process "cmd.exe" -ArgumentList "/c wuauclt /detectnow /updatenow" -NoNewWindow -Wait
+
+# Revert network changes (disable internet routing)
+Write-Host "Reverting network adapter settings..."
+Set-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '0.0.0.0'
+Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('0.0.0.0')
+
+Write-Host "Setup completed successfully!"
+```
