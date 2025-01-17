@@ -313,3 +313,164 @@ output "vsphere_vm_ip" {
 - The network adapter name (`Ethernet0`) is assumed, but you may need to adjust it depending on your Windows image.
 - This script is tailored to clone and update a Windows 10 template. Modify variables such as IP addresses and DNS settings based on your specific network environment.
 
+
+# ---
+You're right. The error you encountered is because `vsphere` is not a provisioner in Packer. The `vsphere` functionality is part of the **builder** configuration, not a provisioner. So, the attempt to use `vsphere` as a provisioner will result in an error.
+
+To fix this, we need to correct the final step of creating a template from the updated VM. We cannot use a `vsphere` provisioner for that. Instead, we'll use the `vsphere-iso` builder to handle the cloning, updating, and creating the new template.
+
+### Corrected Packer HCL Script
+
+```hcl
+# Packer Configuration for cloning and updating a Windows 10 VM template in vSphere
+
+# Required variables
+variable "vsphere_server" {
+  type    = string
+  default = "vsphere.local"
+}
+
+variable "vsphere_user" {
+  type    = string
+  default = "your-username"
+}
+
+variable "vsphere_password" {
+  type    = string
+  default = "your-password"
+}
+
+variable "vsphere_datacenter" {
+  type    = string
+  default = "your-datacenter"
+}
+
+variable "vsphere_datastore" {
+  type    = string
+  default = "your-datastore"
+}
+
+variable "vsphere_cluster" {
+  type    = string
+  default = "your-cluster"
+}
+
+variable "vsphere_template_name" {
+  type    = string
+  default = "win10-template"
+}
+
+variable "vsphere_vm_name" {
+  type    = string
+  default = "win10-clone"
+}
+
+variable "vsphere_network" {
+  type    = string
+  default = "VM Network"
+}
+
+variable "vsphere_resource_pool" {
+  type    = string
+  default = "Resources"
+}
+
+# Packer Builder for vSphere
+source "vsphere-iso" "windows10" {
+  vcenter_server   = var.vsphere_server
+  user             = var.vsphere_user
+  password         = var.vsphere_password
+  datacenter       = var.vsphere_datacenter
+  datastore        = var.vsphere_datastore
+  cluster          = var.vsphere_cluster
+  network          = var.vsphere_network
+  resource_pool   = var.vsphere_resource_pool
+  template         = var.vsphere_template_name
+  vm_name          = var.vsphere_vm_name
+  wait_for_guest_ip_timeout = "30m"
+  
+  # Customize the Windows 10 VM settings if needed
+  customize {
+    windows_options {
+      computer_name = "win10-clone"
+    }
+  }
+
+  # Revert network adapter to block internet access (in case of a reboot)
+  post_shutdown_delay = "10s"
+}
+
+# Provisioner to run PowerShell commands for network configuration (Internet routing)
+build {
+  sources = ["source.vsphere-iso.windows10"]
+
+  provisioner "powershell" {
+    inline = [
+      # Elevate PowerShell to administrator
+      "$currentUser = [System.Security.Principal.WindowsIdentity]::GetCurrent()",
+      "$currentPrincipal = New-Object System.Security.Principal.WindowsPrincipal($currentUser)",
+      "if (-not ($currentPrincipal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator))) {",
+      "  $arguments = '-NoProfile -ExecutionPolicy Bypass -Command ""& {Start-Process powershell -ArgumentList \\"-NoProfile -ExecutionPolicy Bypass -Command \\'$MyInvocation.MyCommand.Definition\\'\\" -Verb RunAs}""'",
+      "  Start-Process powershell -ArgumentList $arguments -Verb RunAs",
+      "  exit",
+      "}",
+      
+      # Enable the internet routing (modify network adapter)
+      "Enable-NetAdapter -Name 'Ethernet0'",
+      "New-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '192.168.1.1'",
+      "Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('8.8.8.8', '8.8.4.4')"
+    ]
+  }
+
+  provisioner "windows-update" {
+    # Run Windows Update
+    update_command = "wuauclt /detectnow /updatenow"
+  }
+
+  provisioner "powershell" {
+    inline = [
+      # Revert network settings to block internet route (disable internet routing)
+      "Set-NetIPAddress -InterfaceAlias 'Ethernet0' -IPAddress '192.168.1.100' -PrefixLength 24 -DefaultGateway '0.0.0.0'",
+      "Set-DnsClientServerAddress -InterfaceAlias 'Ethernet0' -ServerAddresses ('0.0.0.0')"
+    ]
+  }
+
+  # Once the VM is updated, create a new template from the updated VM.
+  # This is done by using the "vsphere-iso" builder and setting the `template` flag.
+
+  # New template creation is handled by builder itself, no separate provisioner required
+  post_process {
+    inline = [
+      "export VM_ID=$(govc vm.info -json -k / -u ${var.vsphere_user}:${var.vsphere_password}@${var.vsphere_server} ${var.vsphere_vm_name} | jq -r '.VirtualMachines[0].MoRef.Value')",
+      "govc vm.markastemplate -k / -u ${var.vsphere_user}:${var.vsphere_password}@${var.vsphere_server} -vm $VM_ID"
+    ]
+  }
+}
+
+# Define the output of the built image
+output "vsphere_vm_ip" {
+  value = "${build.vsphere-iso.windows10.ip_address}"
+}
+```
+
+### Key Updates:
+
+1. **Create a Template from Updated VM**:
+   - The `vsphere` provisioner was removed because it's not a valid provisioner in Packer. Instead, the creation of a new template is handled by a **post-processing step** using `govc` (a command-line utility for interacting with VMware vSphere environments).
+   - `govc` is used to mark the newly cloned and updated VM as a template by calling the `govc vm.markastemplate` command.
+
+2. **Post-processing Step**:
+   - The `post_process` block uses `govc` to interact with vSphere and mark the VM as a template after the VM has been successfully updated. This requires the `govc` tool to be installed and available in the environment where you're running Packer.
+   - The `govc` tool interacts with the vSphere server using environment variables or command-line arguments to authenticate and perform actions like converting the VM into a template.
+
+### Prerequisites:
+
+- **`govc` tool**: You will need to install the `govc` command-line utility to perform the post-processing step. It's part of the `govmomi` project and can be found [here](https://github.com/vmware/govmomi/tree/master/govc).
+  - Ensure that `govc` is accessible in your environment.
+  - You can install it via `brew install govmomi` on macOS or download it from GitHub on Linux.
+
+### How it Works:
+- The `vsphere-iso` builder clones the template, runs the network configuration, applies Windows updates, and then reverts the network settings.
+- The `post_process` block uses `govc` to mark the updated VM as a template in vSphere.
+
+This approach avoids the error with the `vsphere` provisioner and leverages post-processing for creating the new template.
