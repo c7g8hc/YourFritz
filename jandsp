@@ -1,0 +1,82 @@
+	function getSchedulePopInfo(scheduleId,sessionId)
+	{
+		var schedulepopInfoSuccess;
+		$
+				.ajax({
+					url : '${contextPath}' + "/ReportBuilder/getSchedulePopInfo",
+					cache : false,
+					type : 'POST',
+					dataType : 'json',
+					async : false,
+					data : {
+						"scheduleId" : scheduleId,
+						"sessionId" : sessionId
+					},
+					success : function(data) {
+						schedulepopInfoSuccess = data;
+					},
+					error : function(xhr) {
+						//alert("Error Encountered: " + xhr.responseText);
+						alert("Oops, there seems to have been an error. If you continue to experience issues, please reach out to your Account Team.");
+					}
+				});
+
+		
+		return schedulepopInfoSuccess;
+	
+	}
+
+---
+
+	function getRecipientsInfo(contextPath,scheduleId, sessionId){
+		var recipientsData;
+		$
+				.ajax({
+					url : contextPath + "/ReportBuilder/getRecipientsInfo",
+					cache : false,
+					type : 'POST',
+					dataType : 'json',
+					async : false,
+					data : {
+						"scheduleId" : scheduleId,
+						"sessionId" : sessionId
+					},
+					success : function(data) {
+						recipientsData = data;
+						console.log("recipientsData==>"+recipientsData);
+					},
+					error : function(xhr) {
+						//alert("Error Encountered: " + xhr.responseText);
+						alert("Oops, there seems to have been an error. If you continue to experience issues, please reach out to your Account Team.");
+					}
+				});
+		return recipientsData;
+	}
+
+----
+
+    //getRecipientsInfo
+    @RequestMapping(value = "/getRecipientsInfo", method = RequestMethod.POST)
+    public List<EmailNotifyInfo> getRecipientsInfo(@CookieValue(name = "tc-ut") String userToken,
+                                                   @RequestParam("scheduleId") String scheduleId,
+                                                   @RequestParam("sessionId") String sessionId) throws TCException {
+
+        LOG.info("**Entering getRecipientsInfo for Scheduled Reports**");
+        userToken = generateUserToken(userToken);
+        return scheduleInfoService.getRecipientsInfo(userToken, scheduleId);
+    }
+
+    //get Schedule reports Population Info
+    @RequestMapping(value = "/getSchedulePopInfo", method = RequestMethod.POST)
+    public SchedulePopInfo getSchedulePopInfo(@CookieValue(name = "tc-ut") String userToken,
+                                              @RequestParam("scheduleId") String scheduleId,
+                                              @RequestParam("sessionId") String sessionId) throws TCException {
+
+        LOG.info("**Entering getRecipientsInfo for Scheduled Reports**");
+        userToken = generateUserToken(userToken);
+        return scheduleInfoService.getSchedulePopInfo(userToken, scheduleId);
+    }
+
+------
+
+
