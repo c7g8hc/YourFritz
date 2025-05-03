@@ -328,3 +328,167 @@ public class SnowflakeTokenProvider {
 * ✅ Uses proper Redis serialization for custom object storage.
 
 Would you like me to also generate unit tests or a diagram of this flow?
+
+
+
+To connect to an **externally hosted Redis service** at `https://reds.cache.com`, you'll need to configure the connection using the appropriate Redis client. Since `https://` is not a standard Redis protocol (which is typically `redis://` or `rediss://` for TLS), ensure that the provider supports **secure Redis over TLS (SSL)** and exposes the correct port (usually `6380` for TLS).
+
+### ✅ Updated Implementation (for **secure external Redis**) with `rediss://`
+
+---
+
+### 🔧 **1. Update Application Properties**
+
+Update `application.properties` (or `application.yml`) to define Redis connection info:
+
+```properties
+spring.redis.host=reds.cache.com
+spring.redis.port=6380
+spring.redis.ssl.enabled=true
+spring.redis.timeout=5000
+```
+
+> If authentication is required (common for cloud Redis services like Azure Redis, AWS ElastiCache, etc.):
+
+```properties
+spring.redis.password=your_redis_password
+```
+
+---
+
+### 🧱 **2. Redis Configuration Using Secure TLS Connection**
+
+```java
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
+import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
+import org.springframework.data.redis.connection.RedisPassword;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.serializer.GenericJackson2JsonRedisSerializer;
+import org.springframework.data.redis.serializer.StringRedisSerializer;
+
+@Configuration
+public class RedisConfig {
+
+    @Bean
+    public LettuceConnectionFactory redisConnectionFactory() {
+        RedisStandaloneConfiguration config = new RedisStandaloneConfiguration();
+        config.setHostName("reds.cache.com");
+        config.setPort(6380); // typical TLS port
+        config.setPassword(RedisPassword.of("your_redis_password")); // optional
+
+        // TLS is automatically enabled when connecting to port 6380
+        return new LettuceConnectionFactory(config);
+    }
+
+    @Bean
+    public RedisTemplate<String, SnowflakeTokenCache> redisTemplate(LettuceConnectionFactory connectionFactory) {
+        RedisTemplate<String, SnowflakeTokenCache> template = new RedisTemplate<>();
+        template.setConnectionFactory(connectionFactory);
+        template.setKeySerializer(new StringRedisSerializer());
+        template.setValueSerializer(new GenericJackson2JsonRedisSerializer());
+        return template;
+    }
+}
+```
+
+---
+
+### 🧠 **3. SnowflakeTokenCache Class** (Unchanged)
+
+```java
+import java.io.Serializable;
+import java.time.Instant;
+
+public class SnowflakeTokenCache implements Serializable {
+    private final String token;
+    private final Instant expiryTime;
+
+    public SnowflakeTokenCache(String token, Instant expiryTime) {
+        this.token = token;
+        this.expiryTime = expiryTime;
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public Instant getExpiryTime() {
+        return expiryTime;
+    }
+
+    public boolean isExpired() {
+        return Instant.now().isAfter(expiryTime.minusSeconds(30));
+    }
+}
+```
+
+---
+
+### 🔁 **4. Updated Token Service (Same Logic)**
+
+```java
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+
+import java.time.Duration;
+import java.time.Instant;
+
+@Service
+public class SnowflakeTokenService {
+
+    private static final String CACHE_KEY = "snowflake:token";
+
+    @Value("${snowflake.token.expiration.time:3600}")
+    private long tokenValiditySeconds;
+
+    private final SnowflakeTokenProvider tokenProvider;
+    private final RedisTemplate<String, SnowflakeTokenCache> redisTemplate;
+
+    public SnowflakeTokenService(SnowflakeTokenProvider tokenProvider,
+                                 RedisTemplate<String, SnowflakeTokenCache> redisTemplate) {
+        this.tokenProvider = tokenProvider;
+        this.redisTemplate = redisTemplate;
+    }
+
+    public String getToken() {
+        SnowflakeTokenCache cached = redisTemplate.opsForValue().get(CACHE_KEY);
+        if (cached == null || cached.isExpired()) {
+            return refreshToken();
+        }
+        return cached.getToken();
+    }
+
+    public String refreshToken() {
+        String token = tokenProvider.fetchToken();
+        Instant expiry = Instant.now().plusSeconds(tokenValiditySeconds);
+        SnowflakeTokenCache tokenCache = new SnowflakeTokenCache(token, expiry);
+
+        redisTemplate.opsForValue().set(CACHE_KEY, tokenCache, Duration.ofSeconds(tokenValiditySeconds));
+        return token;
+    }
+
+    @Scheduled(fixedDelay = 300000)
+    public void scheduledRefresh() {
+        SnowflakeTokenCache cached = redisTemplate.opsForValue().get(CACHE_KEY);
+        if (cached == null || cached.isExpired()) {
+            refreshToken();
+        }
+    }
+}
+```
+
+---
+
+### ✅ Summary
+
+* Configured **external Redis over TLS** (`reds.cache.com:6380`) with optional password.
+* Redis stores both **token and expiry** in a single object.
+* Uses **RedisTemplate** for typed caching.
+* Automatically refreshes token before expiration.
+
+Would you like a version that uses Spring Cache abstraction or Redis Sentinel support if you're using HA Redis?
+
