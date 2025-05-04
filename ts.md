@@ -492,3 +492,258 @@ public class SnowflakeTokenService {
 
 Would you like a version that uses Spring Cache abstraction or Redis Sentinel support if you're using HA Redis?
 
+=====
+
+Absolutely! Below is a **professional Spring Boot structure** for your Java 17 application, broken into proper packages:
+
+---
+
+## 📦 Project Structure Overview
+
+```
+com.yourcompany.snowflakeauth
+├── boot
+│   └── SnowflakeAuthApplication.java
+├── config
+│   ├── AppConfig.java
+├── model
+│   └── SnowflakeTokenCache.java
+├── service
+│   ├── SnowflakeTokenService.java
+│   ├── SnowflakeTokenProvider.java
+├── common
+│   └── HttpHeaderUtil.java
+└── resources
+    └── application.properties
+```
+
+---
+
+## ✅ Code by Folder
+
+### 🔹 `boot/SnowflakeAuthApplication.java`
+
+```java
+package com.yourcompany.snowflakeauth.boot;
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+
+@SpringBootApplication
+public class SnowflakeAuthApplication {
+    public static void main(String[] args) {
+        SpringApplication.run(SnowflakeAuthApplication.class, args);
+    }
+}
+```
+
+---
+
+### 🔹 `config/AppConfig.java`
+
+```java
+package com.yourcompany.snowflakeauth.config;
+
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.web.client.RestTemplate;
+
+@Configuration
+public class AppConfig {
+
+    @Bean
+    public RestTemplate restTemplate() {
+        return new RestTemplate();
+    }
+}
+```
+
+---
+
+### 🔹 `model/SnowflakeTokenCache.java`
+
+```java
+package com.yourcompany.snowflakeauth.model;
+
+import java.io.Serializable;
+import java.time.Instant;
+
+public class SnowflakeTokenCache implements Serializable {
+    private String token;
+    private Instant expiryTime;
+
+    public SnowflakeTokenCache() {}
+
+    public SnowflakeTokenCache(String token, Instant expiryTime) {
+        this.token = token;
+        this.expiryTime = expiryTime;
+    }
+
+    public String getToken() {
+        return token;
+    }
+
+    public Instant getExpiryTime() {
+        return expiryTime;
+    }
+
+    public boolean isExpired() {
+        return Instant.now().isAfter(expiryTime.minusSeconds(30));
+    }
+}
+```
+
+---
+
+### 🔹 `service/SnowflakeTokenProvider.java`
+
+```java
+package com.yourcompany.snowflakeauth.service;
+
+import org.springframework.stereotype.Component;
+
+@Component
+public class SnowflakeTokenProvider {
+
+    public String fetchToken() {
+        // Replace with actual Snowflake auth logic
+        return "mocked-snowflake-token-" + System.currentTimeMillis();
+    }
+}
+```
+
+---
+
+### 🔹 `service/SnowflakeTokenService.java`
+
+```java
+package com.yourcompany.snowflakeauth.service;
+
+import com.yourcompany.snowflakeauth.common.HttpHeaderUtil;
+import com.yourcompany.snowflakeauth.model.SnowflakeTokenCache;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.*;
+import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+
+import java.time.Instant;
+import java.util.Objects;
+
+@Service
+public class SnowflakeTokenService {
+
+    @Value("${cache.service.url}")
+    private String cacheServiceUrl;
+
+    @Value("${snowflake.token.expiration.time:3600}")
+    private long tokenValiditySeconds;
+
+    private final RestTemplate restTemplate;
+    private final SnowflakeTokenProvider tokenProvider;
+
+    public SnowflakeTokenService(RestTemplate restTemplate, SnowflakeTokenProvider tokenProvider) {
+        this.restTemplate = restTemplate;
+        this.tokenProvider = tokenProvider;
+    }
+
+    public String getToken() {
+        SnowflakeTokenCache cached = getTokenFromCache();
+        if (cached == null || cached.isExpired()) {
+            return refreshToken();
+        }
+        return cached.getToken();
+    }
+
+    public String refreshToken() {
+        String token = tokenProvider.fetchToken();
+        Instant expiry = Instant.now().plusSeconds(tokenValiditySeconds);
+        SnowflakeTokenCache tokenCache = new SnowflakeTokenCache(token, expiry);
+        putTokenToCache(tokenCache);
+        return token;
+    }
+
+    @Scheduled(fixedDelay = 300000)
+    public void scheduledRefresh() {
+        SnowflakeTokenCache cached = getTokenFromCache();
+        if (cached == null || cached.isExpired()) {
+            refreshToken();
+        }
+    }
+
+    private SnowflakeTokenCache getTokenFromCache() {
+        try {
+            ResponseEntity<SnowflakeTokenCache> response = restTemplate.exchange(
+                cacheServiceUrl + "/token",
+                HttpMethod.GET,
+                new HttpEntity<>(HttpHeaderUtil.defaultHeaders()),
+                SnowflakeTokenCache.class
+            );
+            return response.getStatusCode() == HttpStatus.OK ? response.getBody() : null;
+        } catch (Exception e) {
+            System.err.println("Error fetching token from cache: " + e.getMessage());
+            return null;
+        }
+    }
+
+    private void putTokenToCache(SnowflakeTokenCache tokenCache) {
+        try {
+            HttpHeaders headers = HttpHeaderUtil.defaultHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+
+            HttpEntity<SnowflakeTokenCache> request = new HttpEntity<>(tokenCache, headers);
+            restTemplate.exchange(
+                cacheServiceUrl + "/token",
+                HttpMethod.PUT,
+                request,
+                Void.class
+            );
+        } catch (Exception e) {
+            System.err.println("Error putting token to cache: " + e.getMessage());
+        }
+    }
+}
+```
+
+---
+
+### 🔹 `common/HttpHeaderUtil.java`
+
+```java
+package com.yourcompany.snowflakeauth.common;
+
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+
+import java.util.List;
+
+public class HttpHeaderUtil {
+
+    public static HttpHeaders defaultHeaders() {
+        HttpHeaders headers = new HttpHeaders();
+        headers.setAccept(List.of(MediaType.APPLICATION_JSON));
+        return headers;
+    }
+}
+```
+
+---
+
+### 🔹 `resources/application.properties`
+
+```properties
+cache.service.url=https://reds.cache.com
+snowflake.token.expiration.time=3600
+```
+
+---
+
+### ✅ Summary
+
+You now have:
+
+* A clean modular package structure.
+* `HttpEntity` and `RestTemplate` used to interact with a REST-like Redis cache.
+* The token is refreshed and pushed to cache when expired or near expiration.
+
+Would you like to include unit or integration tests using MockWebServer or WireMock for this?
