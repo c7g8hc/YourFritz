@@ -747,3 +747,60 @@ You now have:
 * The token is refreshed and pushed to cache when expired or near expiration.
 
 Would you like to include unit or integration tests using MockWebServer or WireMock for this?
+
+```yaml
+- apiGroups:
+  - ""
+  resources:
+  - replicationcontrollers
+  verbs:
+  - delete
+- apiGroups:
+  - ""
+  resources:
+  - replicationcontrollers
+  verbs:
+  - get
+  - list
+  - patch
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - replicationcontrollers/scale
+  verbs:
+  - get
+  - update
+- apiGroups:
+  - ""
+  resources:
+  - pods
+  verbs:
+  - create
+  - get
+  - list
+  - watch
+- apiGroups:
+  - ""
+  resources:
+  - pods/log
+  verbs:
+  - get
+- apiGroups:
+  - ""
+  resources:
+  - events
+  verbs:
+  - create
+  - list
+- apiGroups:
+  - ""
+  - image.openshift.io
+  resources:
+  - imagestreamtags
+  - imagetags
+  verbs:
+  - create
+  - update
+```
