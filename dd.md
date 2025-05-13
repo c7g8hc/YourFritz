@@ -178,5 +178,104 @@ spec:
    ```
 
 ---
+In Rancher Kubernetes Engine (RKE), containers in your cluster may experience permission issues when executing shell scripts due to the user under which they are running. Let’s break this down and look at causes and fixes.
 
-Would you like me to generate this as a zip or provide an S3 upload-only variant of the backup script?
+---
+
+### 🔍 **Why Permission Issues Happen**
+
+Containers in Kubernetes (including RKE clusters) **do not necessarily run as root**. The behavior depends on:
+
+1. **The Docker image used**: Some images (like `ubuntu`, `centos`, etc.) default to running as root, but others (like `nginx`, `node`, `alpine`, etc.) may specify a non-root user via the `USER` directive in the Dockerfile.
+
+2. **Pod Security Policies (PSP), Security Context, or OPA/Gatekeeper**: Kubernetes might enforce that containers **run as non-root** or under specific user IDs (UIDs).
+
+3. **File permissions**: Your shell script inside the container might not be executable by the user the container runs as (`chmod` or `chown` issues).
+
+---
+
+### 🧪 **How to Check the User**
+
+1. **Check Dockerfile or Image User**:
+
+   ```sh
+   docker inspect <image-name> | grep -i user
+   ```
+
+2. **Check Running Pod User**:
+   Use `kubectl` to `exec` into the container and run:
+
+   ```sh
+   whoami
+   id
+   ```
+
+3. **Look at Security Context** in the pod YAML:
+
+   ```yaml
+   securityContext:
+     runAsUser: 1000
+     runAsNonRoot: true
+   ```
+
+---
+
+### 🛠️ **How to Fix It**
+
+Depending on the issue, here are solutions:
+
+#### 1. ✅ **Script Permission Fix**
+
+Make sure your script inside the container is executable:
+
+```Dockerfile
+COPY your-script.sh /usr/local/bin/your-script.sh
+RUN chmod +x /usr/local/bin/your-script.sh
+```
+
+#### 2. ✅ **Run as Root (If Allowed)**
+
+If your container needs root for specific actions, you can add this to your pod YAML:
+
+```yaml
+securityContext:
+  runAsUser: 0
+```
+
+> **Note**: This might be restricted by your cluster’s security policies (e.g., PSP, OPA).
+
+#### 3. ✅ **Use Custom Security Context**
+
+If you can’t run as root, ensure the script is owned by and executable by the non-root user:
+
+```Dockerfile
+RUN adduser --disabled-password --gecos '' appuser && \
+    chown appuser:appuser /usr/local/bin/your-script.sh && \
+    chmod +x /usr/local/bin/your-script.sh
+
+USER appuser
+```
+
+#### 4. ✅ **Update Pod YAML**
+
+Ensure the correct user is specified in your Kubernetes manifest:
+
+```yaml
+containers:
+- name: example
+  image: your-image
+  command: ["/bin/sh", "-c", "/usr/local/bin/your-script.sh"]
+  securityContext:
+    runAsUser: 1001
+```
+
+---
+
+### 📌 Summary
+
+| Reason                      | Symptom                      | Fix                                  |
+| --------------------------- | ---------------------------- | ------------------------------------ |
+| Non-root container user     | Permission denied errors     | Use `securityContext`, fix ownership |
+| Script not executable       | `/bin/sh: permission denied` | Use `chmod +x` in Dockerfile         |
+| Cluster policy restrictions | Fails to run as root         | Adjust PSP/OPA, or adapt image       |
+
