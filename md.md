@@ -1,10 +1,10 @@
-Got it! You want to reuse an existing VPC, subnets, and other parameters as per the provided `tfvars`. I’ll rewrite the Terraform scripts to accommodate this.
+If you want to set up an **AWS Managed MongoDB** instance, you can use **Amazon DocumentDB**, which is fully compatible with MongoDB, but is a fully managed service provided by AWS.
 
-Here is an updated version of the Terraform configuration that will utilize the existing VPC, subnets, and other parameters.
+Here’s how you can set up an **Amazon DocumentDB** instance using **Terraform** with an existing VPC, subnets, and other parameters as provided.
 
 ---
 
-### **Directory Structure**:
+### **Directory Structure:**
 
 ```
 /terraform
@@ -16,17 +16,48 @@ Here is an updated version of the Terraform configuration that will utilize the 
 
 ---
 
-### **`main.tf`**: Main configuration file for resources
+### **1. `main.tf`**: Main Terraform configuration file
 
 ```hcl
 provider "aws" {
   region = var.aws_region
 }
 
-# MongoDB EC2 Instance Security Group (restricting access to specified CIDR blocks)
+# Amazon DocumentDB Cluster
+resource "aws_docdb_cluster" "mongo_cluster" {
+  cluster_identifier      = var.db_name
+  engine                 = "docdb"
+  engine_version         = var.engine_version
+  master_username        = var.db_username
+  master_password        = var.db_password
+  skip_final_snapshot    = true
+  storage_encrypted      = true
+  db_cluster_parameter_group_name = "default.docdb3.6"  # Adjust to your MongoDB-compatible version
+
+  vpc_security_group_ids = [aws_security_group.mongo_sg.id]
+
+  tags = {
+    Name = var.db_name
+  }
+}
+
+# Amazon DocumentDB Instance
+resource "aws_docdb_cluster_instance" "mongo_instance" {
+  cluster_identifier = aws_docdb_cluster.mongo_cluster.id
+  instance_class     = var.instance_class
+  engine             = "docdb"
+  instance_identifier = "${var.db_name}-instance"
+  publicly_accessible = false  # Ensure the instance is not publicly accessible
+
+  tags = {
+    Name = "${var.db_name}-instance"
+  }
+}
+
+# Security Group for MongoDB (to restrict access)
 resource "aws_security_group" "mongo_sg" {
   name        = "mongo_security_group"
-  description = "Security group for MongoDB with restricted access"
+  description = "Security group for Amazon DocumentDB with restricted access"
   vpc_id      = var.vpc_id
 
   ingress {
@@ -44,55 +75,31 @@ resource "aws_security_group" "mongo_sg" {
   }
 }
 
-# MongoDB EC2 Instance
-resource "aws_instance" "mongo_instance" {
-  ami           = "ami-0c55b159cbfafe1f0"  # Use the latest Ubuntu AMI ID for your region (make sure it's correct)
-  instance_type = var.instance_class
-  subnet_id     = element(var.subnet_ids, 0)  # Use the first subnet from the provided list
-  security_group_ids = [aws_security_group.mongo_sg.id]
-  key_name      = var.key_name  # Make sure to set this variable to your SSH key pair name
-
-  # User data to install MongoDB on EC2 instance
-  user_data = <<-EOT
-              #!/bin/bash
-              apt-get update
-              apt-get install -y mongodb
-              systemctl start mongodb
-              systemctl enable mongodb
-              EOT
-
-  tags = {
-    Name = var.db_name
-  }
-
-  # Disable public IP for private access
-  associate_public_ip_address = false
-
-  # Wait for the instance to be ready before continuing
-  wait_for_maintenance = true
+# Outputs
+output "mongo_cluster_id" {
+  description = "Amazon DocumentDB Cluster ID"
+  value       = aws_docdb_cluster.mongo_cluster.id
 }
 
-# EBS Volume for MongoDB Storage
-resource "aws_ebs_volume" "mongo_storage" {
-  availability_zone = element(var.subnet_ids, 0) # Attach to the same availability zone as the EC2 instance
-  size              = var.allocated_storage
-  tags = {
-    Name = "${var.db_name}-volume"
-  }
+output "mongo_instance_id" {
+  description = "Amazon DocumentDB Instance ID"
+  value       = aws_docdb_cluster_instance.mongo_instance.id
 }
 
-# Attach the EBS volume to the MongoDB EC2 instance
-resource "aws_volume_attachment" "mongo_volume_attachment" {
-  device_name = "/dev/sdh"
-  instance_id = aws_instance.mongo_instance.id
-  volume_id   = aws_ebs_volume.mongo_storage.id
+output "mongo_endpoint" {
+  description = "MongoDB Cluster Endpoint"
+  value       = aws_docdb_cluster.mongo_cluster.endpoint
 }
 
+output "mongo_port" {
+  description = "MongoDB Port"
+  value       = 27017
+}
 ```
 
 ---
 
-### **`variables.tf`**: Variables file
+### **2. `variables.tf`**: Variable definitions file
 
 ```hcl
 variable "aws_region" {
@@ -106,7 +113,7 @@ variable "vpc_id" {
 }
 
 variable "subnet_ids" {
-  description = "The list of Subnet IDs where the EC2 instances will be deployed."
+  description = "The list of Subnet IDs where the DocumentDB cluster will be deployed."
   type        = list(string)
 }
 
@@ -120,30 +127,31 @@ variable "db_name" {
   type        = string
 }
 
-variable "allocated_storage" {
-  description = "The size of the EBS volume in GB."
-  type        = number
-}
-
 variable "instance_class" {
-  description = "The EC2 instance type to use for MongoDB."
+  description = "The instance type for DocumentDB instance."
   type        = string
 }
 
 variable "engine_version" {
-  description = "MongoDB engine version to be used."
+  description = "DocumentDB engine version to be used."
   type        = string
 }
 
-variable "key_name" {
-  description = "The SSH key pair name to access the EC2 instance."
+variable "db_username" {
+  description = "Master username for the MongoDB instance."
   type        = string
+}
+
+variable "db_password" {
+  description = "Master password for the MongoDB instance."
+  type        = string
+  sensitive   = true
 }
 ```
 
 ---
 
-### **`terraform.tfvars`**: The values for variables
+### **3. `terraform.tfvars`**: Values for your variables
 
 ```hcl
 aws_region          = "us-west-2"
@@ -151,72 +159,78 @@ vpc_id              = "vpc-00249b4c86a64b3eb"
 subnet_ids          = ["subnet-04ffa5f09ad7574d6", "subnet-0742c23490882d832"]
 allowed_cidr_blocks = ["10.252.237.160/28", "10.252.237.176/28"]
 db_name             = "cmlab-mongodb-test"
-allocated_storage   = 10
 instance_class      = "db.t3.micro"
-engine_version      = "17.4"
-key_name            = "your-key-pair-name"  # Replace with your SSH key pair name
+engine_version      = "3.6.0"  # Choose an appropriate version
+db_username         = "admin"  # Choose your master username
+db_password         = "yourpassword"  # Set your master password here
 ```
 
 ---
 
-### **`outputs.tf`**: Outputs for easy reference
+### **4. `outputs.tf`**: Outputs for easy access to important resources
 
 ```hcl
-output "vpc_id" {
-  description = "VPC ID"
-  value       = var.vpc_id
-}
-
-output "subnet_ids" {
-  description = "Subnets IDs"
-  value       = var.subnet_ids
+output "mongo_cluster_id" {
+  description = "MongoDB Cluster ID"
+  value       = aws_docdb_cluster.mongo_cluster.id
 }
 
 output "mongo_instance_id" {
-  description = "MongoDB EC2 Instance ID"
-  value       = aws_instance.mongo_instance.id
+  description = "MongoDB Instance ID"
+  value       = aws_docdb_cluster_instance.mongo_instance.id
 }
 
-output "mongo_private_ip" {
-  description = "Private IP of the MongoDB instance"
-  value       = aws_instance.mongo_instance.private_ip
+output "mongo_endpoint" {
+  description = "MongoDB Cluster Endpoint"
+  value       = aws_docdb_cluster.mongo_cluster.endpoint
 }
 
-output "mongo_storage_id" {
-  description = "MongoDB EBS Volume ID"
-  value       = aws_ebs_volume.mongo_storage.id
+output "mongo_port" {
+  description = "MongoDB Port"
+  value       = 27017
 }
 ```
 
 ---
 
-### **Explanation of Changes**:
+### **Explanation of the Terraform Setup**:
 
-1. **VPC and Subnet Usage**: We now use the existing `vpc_id` and `subnet_ids` passed in through the `tfvars` file. The EC2 instance will be launched in one of the existing subnets (using the first subnet from `subnet_ids`).
+1. **Amazon DocumentDB Cluster** (`aws_docdb_cluster`):
 
-2. **Security Group**: The security group is configured to allow MongoDB access only from the specified CIDR blocks (`allowed_cidr_blocks`), ensuring only specific IP ranges can connect to the MongoDB instance.
+   * This resource creates a fully managed MongoDB-compatible cluster on Amazon DocumentDB.
+   * The `engine_version` parameter is set to `"3.6.0"` (DocumentDB is compatible with MongoDB 3.6). Adjust this version if needed.
+   * **Master username** and **password** are provided to access the MongoDB database.
 
-3. **MongoDB EC2 Instance**: The EC2 instance is set up to use the `db.t3.micro` instance type and launch MongoDB using the user data script. The instance is configured to **not** have a public IP (`associate_public_ip_address = false`), ensuring it is accessible only via the private network.
+2. **Amazon DocumentDB Instance** (`aws_docdb_cluster_instance`):
 
-4. **EBS Volume**: An EBS volume is attached to the MongoDB instance with a size of `allocated_storage` (10 GB as per your input).
+   * This is an instance running inside the DocumentDB cluster. It is set to **not be publicly accessible** (`publicly_accessible = false`).
+
+3. **Security Group** (`aws_security_group`):
+
+   * The security group only allows inbound access on port `27017` (the default MongoDB port) from the specified CIDR blocks (`allowed_cidr_blocks`).
+   * **Outbound traffic** is unrestricted to allow the cluster to communicate with the internet or other services.
+
+4. **Outputs**:
+
+   * The `mongo_cluster_id`, `mongo_instance_id`, `mongo_endpoint`, and `mongo_port` are exposed as output values to help you connect to the DocumentDB instance.
 
 ---
 
-### **4. Apply Terraform Configuration**
+### **5. Apply Terraform Configuration**:
 
-1. Initialize Terraform:
+1. **Initialize Terraform**:
 
    ```bash
    terraform init
    ```
 
-2. Review the changes:
+2. **Review the Terraform plan**:
 
    ```bash
    terraform plan
    ```
 
-3. Apply the configuration to provision the resources:
+3. **Apply the Terraform plan**:
 
    ```bash
    terraform apply
@@ -226,10 +240,34 @@ output "mongo_storage_id" {
 
 ---
 
-### **5. Access MongoDB Instance**
+### **6. Connecting to Amazon DocumentDB**
 
-Since the MongoDB instance is within a private subnet and has no public IP, you can connect to it via a **bastion host** (an EC2 instance with a public IP within the same VPC), or use **VPC peering** or **VPN** for direct access.
+Once the Terraform script has successfully applied, you will get the **Cluster Endpoint** and **Port**. You can use this information to connect to the MongoDB-compatible instance using tools like **Mongo Shell**, **MongoDB Compass**, or any MongoDB client.
+
+For example:
+
+```bash
+mongo --ssl --host <your-cluster-endpoint> --username admin --password yourpassword --authenticationDatabase admin --port 27017
+```
+
+Make sure to replace `<your-cluster-endpoint>` with the actual endpoint and `yourpassword` with the password you configured in `terraform.tfvars`.
 
 ---
 
-Let me know if you need further modifications or more details about specific steps!
+### **7. Cleanup**
+
+If you no longer need the resources, you can destroy them to avoid unnecessary charges:
+
+```bash
+terraform destroy
+```
+
+---
+
+### Summary of Key Changes:
+
+* **Amazon DocumentDB** is used instead of self-managing MongoDB.
+* **VPC, subnets**, and **CIDR blocks** are passed through `terraform.tfvars` to ensure the resources are created in the existing infrastructure.
+* The **DocumentDB cluster** is configured with secure access, using private subnets and security groups to restrict access to specific CIDR blocks.
+
+Let me know if you need further adjustments or more details!
